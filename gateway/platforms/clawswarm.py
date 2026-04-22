@@ -119,7 +119,10 @@ class ClawSwarmAdapter(BasePlatformAdapter):
                     async for raw in ws:
                         if self._closing:
                             break
-                        await self._handle_raw(raw)
+                        try:
+                            await self._handle_raw(raw)
+                        except Exception as exc:
+                            logger.exception("ClawSwarm: error handling message: %s", exc)
 
             except asyncio.CancelledError:
                 break
@@ -142,13 +145,20 @@ class ClawSwarmAdapter(BasePlatformAdapter):
         except Exception:
             return
 
-        if msg.get("type") != "message":
+        msg_type = msg.get("type", "")
+
+        # Log auth responses and status messages for diagnostics
+        if msg_type in ("auth_ok", "auth_error", "status", "error"):
+            logger.info("ClawSwarm server: %s", msg)
             return
-        if not msg.get("_context"):
+
+        if msg_type != "message":
             return
 
         self._room_id = msg.get("roomId")
-        context = msg["_context"]
+        # _context is present for @-mentioned messages; may be absent for
+        # direct/admin messages sent from the ClawSwarm backend panel.
+        context = msg.get("_context")
 
         content: str = msg.get("content", "")
         from_user: str = msg.get("from", "unknown")
@@ -167,46 +177,47 @@ class ClawSwarmAdapter(BasePlatformAdapter):
 
         context_lines: list[str] = []
 
-        agent_name = context.get("agentName") or self._agent_name
-        agent_nickname = context.get("agentNickname", "")
-        self_display = f"{agent_nickname} (@{agent_name})" if agent_nickname else f"@{agent_name}"
-        context_lines.append(
-            f"YOUR IDENTITY: You are {self_display}. This is your name in this group chat."
-        )
-
-        task_label = context.get("taskLabel", "")
-        context_lines.append(
-            f"Task scope: {repr(task_label) if task_label else '(no label)'}. "
-            "Only use the conversation history provided as context."
-        )
-
-        if context.get("agentRole"):
-            context_lines.append(f"Your role: {context['agentRole']}")
-
-        other_agents = context.get("roomAgents", [])
-        if other_agents:
-            agent_list = []
-            for a in other_agents:
-                display = f"{a['nickname']} (@{a['name']})" if a.get("nickname") else f"@{a['name']}"
-                agent_list.append("- " + display + (f" — {a['role']}" if a.get("role") else ""))
+        if context:
+            agent_name = context.get("agentName") or self._agent_name
+            agent_nickname = context.get("agentNickname", "")
+            self_display = f"{agent_nickname} (@{agent_name})" if agent_nickname else f"@{agent_name}"
             context_lines.append(
-                "Other agents in this room:\n" + "\n".join(agent_list) + "\n\n"
-                "HOW TO INTERACT WITH OTHER AGENTS:\n"
-                "  /discuss @name <content> — ask a question or continue discussion\n"
-                "  /delegate @name <task>   — formally hand off a task\n"
-                "Commands must appear on their own line. Only ONE command per message."
+                f"YOUR IDENTITY: You are {self_display}. This is your name in this group chat."
             )
 
-        task_history = context.get("taskHistory", [])
-        if task_history:
-            history_lines = ["## Conversation history (most recent last)"]
-            for h in task_history:
-                if h.get("id") == msg_id:
-                    continue
-                role = "Agent" if h.get("fromType") == "agent" else "Human"
-                history_lines.append(f"[{role}] {h['from']}: {h['content']}")
-            if len(history_lines) > 1:
-                context_lines.append("\n".join(history_lines))
+            task_label = context.get("taskLabel", "")
+            context_lines.append(
+                f"Task scope: {repr(task_label) if task_label else '(no label)'}. "
+                "Only use the conversation history provided as context."
+            )
+
+            if context.get("agentRole"):
+                context_lines.append(f"Your role: {context['agentRole']}")
+
+            other_agents = context.get("roomAgents", [])
+            if other_agents:
+                agent_list = []
+                for a in other_agents:
+                    display = f"{a['nickname']} (@{a['name']})" if a.get("nickname") else f"@{a['name']}"
+                    agent_list.append("- " + display + (f" — {a['role']}" if a.get("role") else ""))
+                context_lines.append(
+                    "Other agents in this room:\n" + "\n".join(agent_list) + "\n\n"
+                    "HOW TO INTERACT WITH OTHER AGENTS:\n"
+                    "  /discuss @name <content> — ask a question or continue discussion\n"
+                    "  /delegate @name <task>   — formally hand off a task\n"
+                    "Commands must appear on their own line. Only ONE command per message."
+                )
+
+            task_history = context.get("taskHistory", [])
+            if task_history:
+                history_lines = ["## Conversation history (most recent last)"]
+                for h in task_history:
+                    if h.get("id") == msg_id:
+                        continue
+                    role = "Agent" if h.get("fromType") == "agent" else "Human"
+                    history_lines.append(f"[{role}] {h['from']}: {h['content']}")
+                if len(history_lines) > 1:
+                    context_lines.append("\n".join(history_lines))
 
         extra_system = "\n\n".join(context_lines)
 
@@ -214,24 +225,30 @@ class ClawSwarmAdapter(BasePlatformAdapter):
             chat_id=chat_id,
             chat_type="group",
             user_id=from_user,
-            username=from_user,
-            platform=Platform.CLAWSWARM,
+            user_name=from_user,
         )
 
         event = MessageEvent(
             message_id=msg_id,
-            chat_id=chat_id,
             text=effective_body,
             message_type=MessageType.TEXT,
             source=source,
-            raw=msg,
-            extra={"extra_system": extra_system, "room_id": room_id},
+            raw_message=msg,
         )
+        event.extra = {"extra_system": extra_system, "room_id": room_id}
 
         await self.handle_message(event)
 
-    async def send(self, chat_id: str, text: str, **kwargs) -> SendResult:
-        room_id = kwargs.get("room_id") or self._room_id
+    async def send(self, chat_id: str, content: str = "", **kwargs) -> SendResult:
+        # Parse room_id from chat_id (format: "{room_id}:{msg_id}") or fall back
+        # to explicit kwarg. Never rely on self._room_id (race condition with
+        # concurrent messages).
+        if ":" in chat_id:
+            room_id = chat_id.split(":", 1)[0]
+        else:
+            room_id = chat_id or kwargs.get("room_id") or self._room_id
+        # Accept legacy 'text' kwarg for callers that use the old signature
+        text = content or kwargs.get("text", "")
         if not room_id:
             return SendResult(success=False, error="room_id unknown")
         if not self._ws:
@@ -247,7 +264,10 @@ class ClawSwarmAdapter(BasePlatformAdapter):
             return SendResult(success=False, error=str(exc))
 
     async def send_typing(self, chat_id: str, **kwargs) -> None:
-        room_id = kwargs.get("room_id") or self._room_id
+        if ":" in chat_id:
+            room_id = chat_id.split(":", 1)[0]
+        else:
+            room_id = chat_id or kwargs.get("room_id") or self._room_id
         if not room_id or not self._ws:
             return
         try:

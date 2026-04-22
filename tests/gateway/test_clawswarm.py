@@ -84,3 +84,39 @@ def test_send_message_tool_has_clawswarm():
 def test_toolset_registered():
     from toolsets import TOOLSETS
     assert "hermes-clawswarm" in TOOLSETS
+
+
+@pytest.mark.asyncio
+async def test_handle_raw_no_context(monkeypatch):
+    """Messages without _context (e.g. sent from admin panel) must still be dispatched."""
+    import asyncio
+    from gateway.config import Platform, PlatformConfig
+    from gateway.platforms.clawswarm import ClawSwarmAdapter
+
+    monkeypatch.setenv("CLAWSWARM_SERVER_URL", "ws://localhost:3000")
+    monkeypatch.setenv("CLAWSWARM_TOKEN", "ocs_abc")
+    monkeypatch.setenv("CLAWSWARM_AGENT_NAME", "hermes")
+
+    cfg = PlatformConfig()
+    adapter = ClawSwarmAdapter(cfg)
+
+    received = []
+
+    async def fake_handle(event):
+        received.append(event)
+
+    adapter.handle_message = fake_handle
+
+    msg = {
+        "type": "message",
+        "id": "msg1",
+        "roomId": "room1",
+        "from": "admin",
+        "content": "hello hermes",
+        # no _context field
+    }
+    await adapter._handle_raw(__import__("json").dumps(msg))
+
+    assert len(received) == 1
+    assert received[0].text == "hello hermes"
+    assert received[0].extra["room_id"] == "room1"

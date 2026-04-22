@@ -3833,6 +3833,11 @@ class GatewayRunner:
         if message_text is None:
             return
 
+        # Inject platform-level extra system context (e.g. ClawSwarm task/role info)
+        _extra_system = getattr(event, "extra", {}).get("extra_system", "") if hasattr(event, "extra") else ""
+        if _extra_system:
+            context_prompt = (_extra_system + "\n\n" + context_prompt).strip() if context_prompt else _extra_system
+
         try:
             # Emit agent:start hook
             hook_ctx = {

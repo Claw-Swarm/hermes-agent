@@ -54,6 +54,7 @@ class Platform(Enum):
     SLACK = "slack"
     SIGNAL = "signal"
     MATTERMOST = "mattermost"
+    CLAWSWARM = "clawswarm"
     MATRIX = "matrix"
     HOMEASSISTANT = "homeassistant"
     EMAIL = "email"
@@ -707,6 +708,7 @@ def _validate_gateway_config(config: "GatewayConfig") -> None:
         Platform.DISCORD: "DISCORD_BOT_TOKEN",
         Platform.SLACK: "SLACK_BOT_TOKEN",
         Platform.MATTERMOST: "MATTERMOST_TOKEN",
+        Platform.CLAWSWARM: "CLAWSWARM_TOKEN",
         Platform.MATRIX: "MATRIX_ACCESS_TOKEN",
         Platform.WEIXIN: "WEIXIN_TOKEN",
     }
@@ -864,6 +866,27 @@ def _apply_env_overrides(config: GatewayConfig) -> None:
             platform=Platform.MATTERMOST,
             chat_id=mattermost_home,
             name=os.getenv("MATTERMOST_HOME_CHANNEL_NAME", "Home"),
+        )
+
+    # ClawSwarm
+    clawswarm_token = os.getenv("CLAWSWARM_TOKEN")
+    if clawswarm_token:
+        clawswarm_url = os.getenv("CLAWSWARM_SERVER_URL", "")
+        clawswarm_name = os.getenv("CLAWSWARM_AGENT_NAME", "hermes")
+        if not clawswarm_url:
+            logger.warning("CLAWSWARM_TOKEN set but CLAWSWARM_SERVER_URL is missing")
+        if Platform.CLAWSWARM not in config.platforms:
+            config.platforms[Platform.CLAWSWARM] = PlatformConfig()
+        config.platforms[Platform.CLAWSWARM].enabled = True
+        config.platforms[Platform.CLAWSWARM].token = clawswarm_token
+        config.platforms[Platform.CLAWSWARM].extra["server_url"] = clawswarm_url
+        config.platforms[Platform.CLAWSWARM].extra["agent_name"] = clawswarm_name
+    clawswarm_home = os.getenv("CLAWSWARM_HOME_CHANNEL")
+    if clawswarm_home and Platform.CLAWSWARM in config.platforms:
+        config.platforms[Platform.CLAWSWARM].home_channel = HomeChannel(
+            platform=Platform.CLAWSWARM,
+            chat_id=clawswarm_home,
+            name=os.getenv("CLAWSWARM_HOME_CHANNEL_NAME", "Home"),
         )
 
     # Matrix

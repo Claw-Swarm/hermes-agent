@@ -120,3 +120,107 @@ async def test_handle_raw_no_context(monkeypatch):
     assert len(received) == 1
     assert received[0].text == "hello hermes"
     assert received[0].extra["room_id"] == "room1"
+
+
+@pytest.mark.asyncio
+async def test_handle_raw_with_skills(monkeypatch):
+    """_context with agentSkills must appear in extra_system."""
+    from gateway.config import PlatformConfig
+    from gateway.platforms.clawswarm import ClawSwarmAdapter
+
+    monkeypatch.setenv("CLAWSWARM_SERVER_URL", "ws://localhost:3000")
+    monkeypatch.setenv("CLAWSWARM_TOKEN", "ocs_abc")
+    monkeypatch.setenv("CLAWSWARM_AGENT_NAME", "hermes")
+
+    adapter = ClawSwarmAdapter(PlatformConfig())
+    received = []
+
+    async def fake_handle(event):
+        received.append(event)
+
+    adapter.handle_message = fake_handle
+
+    import json as _json
+    msg = {
+        "type": "message",
+        "id": "m1",
+        "roomId": "r1",
+        "from": "user1",
+        "content": "hello",
+        "_context": {
+            "agentName": "hermes",
+            "agentNickname": "",
+            "agentRole": "assistant",
+            "agentSkills": ["coding", "research"],
+            "taskLabel": "test",
+            "taskHistory": [],
+            "roomAgents": [],
+        },
+    }
+    await adapter._handle_raw(_json.dumps(msg))
+    assert len(received) == 1
+    assert "coding, research" in received[0].extra["extra_system"]
+
+
+@pytest.mark.asyncio
+async def test_handle_raw_empty_content_dropped(monkeypatch):
+    """Messages with empty/whitespace content must be silently dropped."""
+    from gateway.config import PlatformConfig
+    from gateway.platforms.clawswarm import ClawSwarmAdapter
+
+    monkeypatch.setenv("CLAWSWARM_SERVER_URL", "ws://localhost:3000")
+    monkeypatch.setenv("CLAWSWARM_TOKEN", "ocs_abc")
+    monkeypatch.setenv("CLAWSWARM_AGENT_NAME", "hermes")
+
+    adapter = ClawSwarmAdapter(PlatformConfig())
+    received = []
+
+    async def fake_handle(event):
+        received.append(event)
+
+    adapter.handle_message = fake_handle
+
+    import json as _json
+    msg = {"type": "message", "id": "m2", "roomId": "r1", "from": "user1", "content": "   "}
+    await adapter._handle_raw(_json.dumps(msg))
+    assert len(received) == 0
+
+
+@pytest.mark.asyncio
+async def test_handle_raw_missing_room_id_dropped(monkeypatch):
+    """Messages without roomId must be silently dropped."""
+    from gateway.config import PlatformConfig
+    from gateway.platforms.clawswarm import ClawSwarmAdapter
+
+    monkeypatch.setenv("CLAWSWARM_SERVER_URL", "ws://localhost:3000")
+    monkeypatch.setenv("CLAWSWARM_TOKEN", "ocs_abc")
+    monkeypatch.setenv("CLAWSWARM_AGENT_NAME", "hermes")
+
+    adapter = ClawSwarmAdapter(PlatformConfig())
+    received = []
+
+    async def fake_handle(event):
+        received.append(event)
+
+    adapter.handle_message = fake_handle
+
+    import json as _json
+    msg = {"type": "message", "id": "m3", "from": "user1", "content": "hi"}
+    await adapter._handle_raw(_json.dumps(msg))
+    assert len(received) == 0
+
+
+@pytest.mark.asyncio
+async def test_auth_error_stops_reconnect(monkeypatch):
+    """auth_error frame must set _closing=True to prevent reconnect spam."""
+    from gateway.config import PlatformConfig
+    from gateway.platforms.clawswarm import ClawSwarmAdapter
+
+    monkeypatch.setenv("CLAWSWARM_SERVER_URL", "ws://localhost:3000")
+    monkeypatch.setenv("CLAWSWARM_TOKEN", "ocs_bad")
+    monkeypatch.setenv("CLAWSWARM_AGENT_NAME", "hermes")
+
+    adapter = ClawSwarmAdapter(PlatformConfig())
+    import json as _json
+    await adapter._handle_raw(_json.dumps({"type": "auth_error", "message": "invalid token"}))
+    assert adapter._closing is True

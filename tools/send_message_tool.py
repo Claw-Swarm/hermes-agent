@@ -155,6 +155,7 @@ def _handle_send(args):
         "qqbot": Platform.QQBOT,
         "matrix": Platform.MATRIX,
         "mattermost": Platform.MATTERMOST,
+        "clawswarm": Platform.CLAWSWARM,
         "homeassistant": Platform.HOMEASSISTANT,
         "dingtalk": Platform.DINGTALK,
         "feishu": Platform.FEISHU,
@@ -418,6 +419,8 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             result = await _send_sms(pconfig.api_key, chat_id, chunk)
         elif platform == Platform.MATTERMOST:
             result = await _send_mattermost(pconfig.token, pconfig.extra, chat_id, chunk)
+        elif platform == Platform.CLAWSWARM:
+            result = await _send_clawswarm(pconfig, chat_id, chunk)
         elif platform == Platform.MATRIX:
             result = await _send_matrix(pconfig.token, pconfig.extra, chat_id, chunk)
         elif platform == Platform.HOMEASSISTANT:
@@ -1096,6 +1099,21 @@ async def _send_qqbot(pconfig, chat_id, message):
                 return _error(f"QQBot send failed: {resp.status_code} {resp.text}")
     except Exception as e:
         return _error(f"QQBot send failed: {e}")
+
+
+async def _send_clawswarm(pconfig: "PlatformConfig", chat_id: str, message: str) -> dict:
+    """Send a single message to a ClawSwarm room (for cron/tool use)."""
+    import websockets
+    server_url = (pconfig.extra.get("server_url") or os.getenv("CLAWSWARM_SERVER_URL", "")).rstrip("/")
+    token = pconfig.token or os.getenv("CLAWSWARM_TOKEN", "")
+    agent_name = pconfig.extra.get("agent_name") or os.getenv("CLAWSWARM_AGENT_NAME", "hermes")
+    room_id = chat_id.split(":")[0] if ":" in chat_id else chat_id
+
+    ws_url = f"{server_url}/ws/agent"
+    async with websockets.connect(ws_url) as ws:
+        await ws.send(json.dumps({"type": "auth", "token": token, "agentName": agent_name}))
+        await ws.send(json.dumps({"type": "message", "roomId": room_id, "content": message}))
+    return {"success": True}
 
 
 # --- Registry ---

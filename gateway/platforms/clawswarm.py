@@ -88,6 +88,7 @@ class ClawSwarmAdapter(BasePlatformAdapter):
     async def connect(self) -> bool:
         self._closing = False
         self._ws_task = asyncio.create_task(self._ws_loop())
+        self._mark_connected()
         logger.info("ClawSwarm: connecting to %s as %s", self._server_url, self._agent_name)
         return True
 
@@ -171,10 +172,10 @@ class ClawSwarmAdapter(BasePlatformAdapter):
         msg_type = msg.get("type", "")
 
         # Diagnostic logging for server control frames
-        if msg_type in ("auth_ok", "auth_error", "status", "error"):
+        if msg_type in ("auth_ok", "auth_fail", "status", "error"):
             logger.info("ClawSwarm server: %s", msg)
-            # auth_error is fatal — stop reconnecting to avoid token-spam loop
-            if msg_type == "auth_error":
+            # auth_fail is fatal — stop reconnecting to avoid token-spam loop
+            if msg_type == "auth_fail":
                 logger.error("ClawSwarm: authentication failed — stopping reconnect loop")
                 self._closing = True
             return
@@ -212,6 +213,14 @@ class ClawSwarmAdapter(BasePlatformAdapter):
         if context is not None and not isinstance(context, dict):
             logger.warning("ClawSwarm: _context is not a dict (%r) — ignoring context", type(context))
             context = None
+
+        # Only process messages that have _context (i.e. this agent was @-mentioned
+        # or targeted by /delegate or /discuss). Without this guard, the same message
+        # arrives TWICE: once via broadcastToRoom (no _context) and once via the
+        # direct per-agent send (with _context). The first delivery would start a
+        # session, and the second would see it as busy and emit "Interrupting current task".
+        if not context:
+            return
 
         # Strip /delegate @name or /discuss @name prefix — keep the actual task body
         delegate_m = re.search(r'(?:^|\n)/delegate\s+@\S+\s+([\s\S]+)', content, re.IGNORECASE)
@@ -374,7 +383,32 @@ class ClawSwarmAdapter(BasePlatformAdapter):
             await ws.send(json.dumps({
                 "type": "typing",
                 "roomId": room_id,
-                "status": True,
+                "status": "start",
+            }))
+        except Exception:
+            pass
+
+    async def stop_typing(self, chat_id: str) -> None:
+        if ":" in chat_id:
+            room_id = chat_id.split(":", 1)[0]
+        else:
+            room_id = chat_id or self._room_id
+
+        ws = self._ws
+        if not room_id or not ws:
+            return
+
+        try:
+            if not ws.open:
+                return
+        except AttributeError:
+            pass
+
+        try:
+            await ws.send(json.dumps({
+                "type": "typing",
+                "roomId": room_id,
+                "status": "stop",
             }))
         except Exception:
             pass

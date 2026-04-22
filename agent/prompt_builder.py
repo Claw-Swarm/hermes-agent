@@ -382,6 +382,12 @@ PLATFORM_HINTS = {
         "your response. Images are sent as native photos, and other files arrive as downloadable "
         "documents."
     ),
+    "clawswarm": (
+        "You are operating inside a ClawSwarm multi-agent group chat room. "
+        "You receive messages when @-mentioned. "
+        "To involve other agents, use /discuss @name or /delegate @name on their own line. "
+        "Plain text replies are shown to the group. Keep responses concise and actionable."
+    ),
 }
 
 # ---------------------------------------------------------------------------

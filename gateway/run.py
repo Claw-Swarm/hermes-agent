@@ -2497,6 +2497,13 @@ class GatewayRunner:
                 return None
             return MattermostAdapter(config)
 
+        elif platform == Platform.CLAWSWARM:
+            from gateway.platforms.clawswarm import ClawSwarmAdapter, check_clawswarm_requirements
+            if not check_clawswarm_requirements():
+                logger.warning("ClawSwarm: requirements not met — check env vars and websockets package")
+                return None
+            return ClawSwarmAdapter(config)
+
         elif platform == Platform.MATRIX:
             from gateway.platforms.matrix import MatrixAdapter, check_matrix_requirements
             if not check_matrix_requirements():
@@ -2576,6 +2583,7 @@ class GatewayRunner:
             Platform.WEIXIN: "WEIXIN_ALLOWED_USERS",
             Platform.BLUEBUBBLES: "BLUEBUBBLES_ALLOWED_USERS",
             Platform.QQBOT: "QQ_ALLOWED_USERS",
+            Platform.CLAWSWARM: "CLAWSWARM_ALLOWED_USERS",
         }
         platform_allow_all_map = {
             Platform.TELEGRAM: "TELEGRAM_ALLOW_ALL_USERS",
@@ -2594,6 +2602,7 @@ class GatewayRunner:
             Platform.WEIXIN: "WEIXIN_ALLOW_ALL_USERS",
             Platform.BLUEBUBBLES: "BLUEBUBBLES_ALLOW_ALL_USERS",
             Platform.QQBOT: "QQ_ALLOW_ALL_USERS",
+            Platform.CLAWSWARM: "CLAWSWARM_ALLOW_ALL_USERS",
         }
 
         # Per-platform allow-all flag (e.g., DISCORD_ALLOW_ALL_USERS=true)
